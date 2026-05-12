@@ -8,7 +8,7 @@ Design:
     - FALLBACK source: yfinance (Yahoo Finance)
                        Free, no API key required. Used when:
                          * FMP_API_KEY is not configured, OR
-                         * FMP returns a partial result (specific statement empty)
+                         * FMP returns an error / partial result
                        In the partial case, missing pieces are merge-filled from yfinance.
 
     All sources return a unified dict shape so downstream code is agnostic.
@@ -16,6 +16,11 @@ Design:
 Routing:
     US stocks  -> FMP (primary) -> yfinance (fallback)
     Non-US     -> rejected with a clear error (this build is US-only)
+
+Diagnostics:
+    Every call to FMP logs its outcome into _FMP_DIAG (last 20 calls).
+    Call diagnose() to see what happened on the most recent fetches.
+    The Streamlit UI surfaces this via a "Data source diagnostics" expander.
 
 Dependencies:
     pip install yfinance      # Yahoo Finance
@@ -29,9 +34,46 @@ Environment variables (optional but strongly recommended):
 import os
 import time
 import random
+from collections import deque
 from typing import Dict, Optional
 import pandas as pd
 import streamlit as st
+
+
+# ===========================================
+# Diagnostic log (ring buffer of last 20 FMP calls)
+# ===========================================
+_FMP_DIAG = deque(maxlen=20)
+
+
+def _log(endpoint: str, status: str, detail: str = "") -> None:
+    """Record an FMP call outcome for diagnostics."""
+    _FMP_DIAG.append({
+        "endpoint": endpoint,
+        "status": status,
+        "detail": detail,
+        "ts": time.strftime("%H:%M:%S"),
+    })
+
+
+def diagnose() -> Dict:
+    """
+    Return current data-source diagnostics. The UI can use this to show the user
+    what's actually happening with FMP and why a request might have fallen back
+    to yfinance.
+    """
+    key = _get_fmp_key()
+    return {
+        "fmp_key_present": bool(key),
+        "fmp_key_length": len(key) if key else 0,
+        "fmp_key_source": _get_fmp_key_source(),
+        "recent_calls": list(_FMP_DIAG),
+    }
+
+
+def clear_diagnostics() -> None:
+    """Reset the diagnostic log."""
+    _FMP_DIAG.clear()
 
 
 # ===========================================
@@ -46,7 +88,6 @@ def detect_market(ticker: str) -> str:
     if not ticker:
         return "unsupported"
     t = ticker.upper().strip()
-    # US tickers are plain alphanumeric (with optional - or .) and no foreign suffix
     if any(t.endswith(suf) for suf in [".SS", ".SZ", ".BJ", ".HK", ".T", ".L",
                                           ".DE", ".PA", ".KS", ".SW", ".MI", ".AS"]):
         return "unsupported"
@@ -78,41 +119,108 @@ def _call_with_retry(func, *args, max_retries=3, **kwargs):
 
 
 # ===========================================
-# FMP (Financial Modeling Prep) free tier
+# FMP (Financial Modeling Prep)
 # ===========================================
 
+# Note: We use FMP API v3 endpoints throughout, which are the most
+# compatible with the free tier.
 FMP_BASE = "https://financialmodelingprep.com/api/v3"
 
 
 def _get_fmp_key() -> Optional[str]:
     """Get FMP API key from Streamlit secrets or environment variable."""
+    # 1) Streamlit secrets
     try:
         key = st.secrets.get("FMP_API_KEY", None)
-        if key:
-            return key
+        if key and isinstance(key, str) and key.strip():
+            return key.strip()
     except Exception:
         pass
-    return os.environ.get("FMP_API_KEY")
+    # 2) Environment variable
+    env_key = os.environ.get("FMP_API_KEY", "").strip()
+    if env_key:
+        return env_key
+    return None
+
+
+def _get_fmp_key_source() -> str:
+    """Tell us WHERE the FMP key was found (for diagnostics)."""
+    try:
+        key = st.secrets.get("FMP_API_KEY", None)
+        if key and isinstance(key, str) and key.strip():
+            return "streamlit_secrets"
+    except Exception:
+        pass
+    if os.environ.get("FMP_API_KEY", "").strip():
+        return "env_var"
+    return "not_found"
 
 
 def _fmp_get(endpoint: str, params: Optional[Dict] = None) -> Optional[list]:
-    """Hit FMP REST endpoint. Returns parsed JSON list, or None on failure."""
+    """
+    Hit FMP REST endpoint. Returns parsed JSON list, or None on failure.
+    All outcomes (success/failure) are logged to _FMP_DIAG.
+    """
     import requests
     key = _get_fmp_key()
     if not key:
+        _log(endpoint, "skip", "FMP_API_KEY not configured")
         return None
+
     params = params or {}
     params["apikey"] = key
+
     try:
         resp = requests.get(f"{FMP_BASE}/{endpoint}", params=params, timeout=10)
-        if not resp.ok:
-            return None
-        data = resp.json()
-        if isinstance(data, dict) and "Error Message" in data:
-            return None
-        return data if isinstance(data, list) else None
-    except Exception:
+    except requests.exceptions.Timeout:
+        _log(endpoint, "error", "request timed out (>10s)")
         return None
+    except requests.exceptions.ConnectionError as e:
+        _log(endpoint, "error", f"connection error: {str(e)[:80]}")
+        return None
+    except Exception as e:
+        _log(endpoint, "error", f"{type(e).__name__}: {str(e)[:80]}")
+        return None
+
+    # HTTP-level errors
+    if resp.status_code == 401:
+        _log(endpoint, "auth_error", "401 - invalid or missing API key")
+        return None
+    if resp.status_code == 403:
+        _log(endpoint, "paywall", "403 - endpoint requires paid plan")
+        return None
+    if resp.status_code == 429:
+        _log(endpoint, "rate_limit", "429 - daily quota exceeded (250/day on free tier)")
+        return None
+    if not resp.ok:
+        _log(endpoint, "http_error", f"HTTP {resp.status_code}: {resp.text[:100]}")
+        return None
+
+    # Parse JSON
+    try:
+        data = resp.json()
+    except Exception as e:
+        _log(endpoint, "parse_error", f"invalid JSON: {str(e)[:80]}")
+        return None
+
+    # FMP-level error messages
+    if isinstance(data, dict):
+        if "Error Message" in data:
+            _log(endpoint, "fmp_error", str(data["Error Message"])[:120])
+            return None
+        if "message" in data and not data.get("symbol"):
+            _log(endpoint, "fmp_error", str(data["message"])[:120])
+            return None
+
+    if isinstance(data, list):
+        if len(data) == 0:
+            _log(endpoint, "empty", "API returned empty list")
+            return None
+        _log(endpoint, "ok", f"received {len(data)} record(s)")
+        return data
+
+    _log(endpoint, "unexpected", f"unexpected response type: {type(data).__name__}")
+    return None
 
 
 def fmp_get_company_info(ticker: str) -> Optional[Dict]:
@@ -261,7 +369,7 @@ def setup_status() -> Dict[str, bool]:
     """Tell the UI whether FMP is configured (primary) or only yfinance is available."""
     return {
         "fmp_configured": bool(_get_fmp_key()),
-        "yfinance_available": True,  # Always available; no key needed
+        "yfinance_available": True,
     }
 
 
@@ -325,7 +433,6 @@ def get_financials_smart(ticker: str) -> Dict[str, pd.DataFrame]:
         if fmp_result and not fmp_result["income"].empty \
                 and not fmp_result["balance"].empty \
                 and not fmp_result["cashflow"].empty:
-            # FMP returned everything - use directly
             return fmp_result
 
     # FALLBACK: yfinance (also used to fill FMP gaps)
