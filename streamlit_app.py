@@ -152,6 +152,11 @@ with st.sidebar:
 
     st.markdown("---")
     run = st.button("🚀 Run Analysis", type="primary", use_container_width=True)
+    if run:
+        # Persist the Classic analysis state across Streamlit reruns.
+        # Download buttons trigger a rerun by default, and without this flag
+        # the app would return to the initial welcome screen.
+        st.session_state["classic_analysis_has_run"] = True
 
     with st.expander("ℹ️ Input Examples"):
         st.markdown("""
@@ -168,7 +173,10 @@ with st.sidebar:
 
 
 # ===== Main area - welcome screen =====
-if not run:
+# Keep showing the most recent Classic analysis after non-input reruns
+# such as downloading Markdown / HTML / Word / PDF reports.
+has_classic_analysis = st.session_state.get("classic_analysis_has_run", False)
+if not run and not has_classic_analysis:
     st.info("👈 Enter a company name (e.g. Apple, Tesla) or ticker on the left, "
              "then click **Run Analysis**.")
 
@@ -702,6 +710,7 @@ with tab6:
             file_name=f"{ticker}_{actual_year}_FinancialAnalysis.md",
             mime="text/markdown",
             use_container_width=True,
+            on_click="ignore",
         )
 
     with fmt_col2:
@@ -714,6 +723,7 @@ with tab6:
                 file_name=f"{ticker}_{actual_year}_FinancialAnalysis.html",
                 mime="text/html",
                 use_container_width=True,
+                on_click="ignore",
             )
         except Exception as e:
             st.button("HTML (failed)", disabled=True,
@@ -730,6 +740,7 @@ with tab6:
                 file_name=f"{ticker}_{actual_year}_FinancialAnalysis.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True,
+                on_click="ignore",
             )
         except Exception as e:
             st.button("Word (failed)", disabled=True,
@@ -748,6 +759,7 @@ with tab6:
                     file_name=f"{ticker}_{actual_year}_FinancialAnalysis.pdf",
                     mime="application/pdf",
                     use_container_width=True,
+                    on_click="ignore",
                 )
             else:
                 st.button("PDF (unavailable)", disabled=True,
