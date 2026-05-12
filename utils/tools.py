@@ -145,24 +145,77 @@ def tool_dupont_analysis(company: str, year: int = 2024) -> Dict:
 
 
 def tool_trend_analysis(company: str, num_years: int = 5,
-                          target_year: int = 2024) -> Dict:
-    """Multi-year trend analysis for core metrics."""
+                          target_year: Optional[int] = None) -> Dict:
+    """
+    Multi-year trend analysis for core metrics.
+
+    If target_year is not provided, automatically use the latest fiscal year
+    available from the data source. This makes prompts like "past 5 years"
+    mean "the latest available 5 fiscal years" instead of being fixed at 2024.
+    """
     ticker = resolve_ticker(company)
     if not ticker:
         return {"error": f"Could not find a US ticker for '{company}'"}
 
     fin = fetch_financials(ticker)
-    if fin.get("income", pd.DataFrame()).empty:
-        return {"error": f"Financial data not available for {ticker}"}
+    income = fin.get("income", pd.DataFrame())
+    if income.empty:
+        return {
+            "error": f"Financial data not available for {ticker}",
+            "data_source": fin.get("_source", "unknown"),
+        }
 
-    trend_df = compute_multi_year_ratios(fin, target_year, num_years=num_years)
+    available_years = sorted(
+        {int(c.year) for c in income.columns if hasattr(c, "year")},
+        reverse=True,
+    )
+    if not available_years:
+        return {
+            "error": f"No annual fiscal-year columns found for {ticker}",
+            "data_source": fin.get("_source", "unknown"),
+        }
+
+    # Important fix: do not default to 2024. Use latest available year unless the
+    # user explicitly asks for an ending year.
+    if target_year is None:
+        target_year = available_years[0]
+
+    try:
+        num_years = max(1, int(num_years or 5))
+    except Exception:
+        num_years = 5
+
+    trend_df = compute_multi_year_ratios(fin, int(target_year), num_years=num_years)
     if trend_df.empty:
-        return {"error": "Insufficient trend data"}
+        return {
+            "error": "Insufficient trend data",
+            "ticker": ticker,
+            "data_source": fin.get("_source", "unknown"),
+            "requested_years": num_years,
+            "target_year": int(target_year),
+            "available_years": available_years,
+        }
 
     key_metrics = ["Net Margin", "ROE (Return on Equity)", "ROA (Return on Assets)",
                    "Gross Margin", "Debt to Assets", "Asset Turnover"]
-    result = {"ticker": ticker, "years": [int(y) for y in trend_df.columns],
-              "actual_years_count": len(trend_df.columns), "trends": {}}
+    displayed_years = [int(y) for y in trend_df.columns]
+    result = {
+        "ticker": ticker,
+        "data_source": fin.get("_source", "unknown"),
+        "requested_years": num_years,
+        "target_year": int(target_year),
+        "available_years": available_years,
+        "years": displayed_years,
+        "actual_years_count": len(displayed_years),
+        "trends": {},
+    }
+
+    if len(displayed_years) < num_years:
+        result["data_availability_note"] = (
+            f"Requested {num_years} years ending in {target_year}, but only "
+            f"{len(displayed_years)} usable annual years were available after "
+            "fetching and ratio calculation."
+        )
 
     for m in key_metrics:
         if m not in trend_df.index:
@@ -371,13 +424,13 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "trend_analysis",
             "description": ("Multi-year trend analysis showing how core metrics changed "
-                            "(up/down/flat) over the past several years."),
+                            "(up/down/flat) over the past several years. If the user asks for past N years and does not specify an ending year, omit target_year so the tool uses the latest available fiscal year."),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "company": {"type": "string", "description": "Company name or ticker"},
                     "num_years": {"type": "integer", "description": "Years to look back, default 5 (actual may be fewer)"},
-                    "target_year": {"type": "integer", "description": "Ending year, default 2024"},
+                    "target_year": {"type": "integer", "description": "Optional ending fiscal year. If omitted, the latest available fiscal year is used."},
                 },
                 "required": ["company"],
             },
