@@ -441,3 +441,34 @@ def get_financials_smart(ticker: str) -> Dict[str, pd.DataFrame]:
         "error": f"Could not fetch financials for {ticker}.",
         "_source": "none",
     }
+# ===========================================
+# Diagnostics helpers
+# ===========================================
+
+def diagnose(*args, **kwargs):
+    """
+    Return diagnostic information for the Streamlit UI.
+    This function does not make a new API call.
+    It only reports current FMP configuration and recent FMP call logs.
+    """
+    try:
+        recent_calls = list(st.session_state.get("fmp_call_log", []))
+    except Exception:
+        recent_calls = []
+
+    return {
+        "fmp_configured": bool(_get_fmp_key()),
+        "fmp_base": FMP_BASE,
+        "yfinance_available": True,
+        "recent_fmp_calls": recent_calls,
+    }
+
+
+    def clear_diagnostics(*args, **kwargs):
+        """
+        Clear recent FMP diagnostic call logs.
+        """
+        try:
+            st.session_state["fmp_call_log"] = []
+        except Exception:
+            pass
