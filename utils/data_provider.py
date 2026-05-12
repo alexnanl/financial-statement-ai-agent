@@ -52,7 +52,7 @@ USE_SEC = True    # SEC EDGAR is the primary source in this build
 # ===========================================
 # SEC user-agent (required by SEC fair-use policy)
 # ===========================================
-DEFAULT_SEC_USER_AGENT = "alexnanl (alexnanl@github.com)"
+DEFAULT_SEC_USER_AGENT = "Nan Liu (liun@bgsu.edu)"
 
 
 def _get_sec_user_agent() -> str:
