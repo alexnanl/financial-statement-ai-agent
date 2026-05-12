@@ -24,7 +24,7 @@ from utils.charts import (
     plot_dupont_waterfall, plot_radar
 )
 from utils.report import generate_report
-from utils.data_provider import setup_status
+from utils.data_provider import setup_status, diagnose, clear_diagnostics
 
 
 # ===== Page config =====
@@ -78,6 +78,52 @@ with st.sidebar:
     else:
         st.caption("📡 Data: **yfinance** only "
                     "(add `FMP_API_KEY` for better reliability)")
+
+    # Data source diagnostics - show users what FMP is actually doing
+    with st.expander("🔍 Data Source Diagnostics", expanded=False):
+        diag = diagnose()
+
+        # Key presence + source
+        if diag["fmp_key_present"]:
+            st.success(f"✅ FMP_API_KEY found in **{diag['fmp_key_source']}** "
+                        f"({diag['fmp_key_length']} chars)")
+        else:
+            st.error("❌ FMP_API_KEY not found. "
+                      "App is using **yfinance only**.\n\n"
+                      "**To fix**: add `FMP_API_KEY = \"...\"` to "
+                      "Streamlit Cloud → Settings → Secrets, "
+                      "or set the env var locally.")
+
+        # Recent FMP calls
+        recent = diag["recent_calls"]
+        if recent:
+            st.markdown("**Recent FMP calls** (latest first):")
+            # Show in reverse chronological order
+            for call in reversed(recent[-10:]):
+                status_emoji = {
+                    "ok": "✅",
+                    "skip": "⏭️",
+                    "auth_error": "🔑",
+                    "paywall": "💰",
+                    "rate_limit": "⏱️",
+                    "empty": "📭",
+                    "error": "❌",
+                    "http_error": "🌐",
+                    "fmp_error": "⚠️",
+                    "parse_error": "🔧",
+                    "unexpected": "❓",
+                }.get(call["status"], "•")
+                st.caption(f"{status_emoji} `{call['ts']}` "
+                           f"**{call['status']}** `{call['endpoint']}` "
+                           f"{('— ' + call['detail']) if call['detail'] else ''}")
+        else:
+            st.caption("_No FMP calls yet this session. Run an analysis to see activity._")
+
+        if st.button("🧹 Clear diagnostics", key="clear_diag"):
+            clear_diagnostics()
+            # Also clear cached results so a re-run actually hits FMP again
+            st.cache_data.clear()
+            st.rerun()
 
     st.markdown("---")
 
