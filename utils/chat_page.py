@@ -42,6 +42,7 @@ def _render_report_download_buttons(ev: dict, key_prefix: str, api_key: str = No
             mime="text/markdown",
             key=f"{key_prefix}_md_only",
             disabled=not bool(md_content),
+            on_click="ignore",
         )
         if not md_content:
             st.warning("Report content is empty. Please send a new request "
@@ -144,6 +145,7 @@ def _render_report_download_buttons(ev: dict, key_prefix: str, api_key: str = No
             mime="text/markdown",
             use_container_width=True,
             key=f"{key_prefix}_md",
+            on_click="ignore",
         )
 
     with fmt_col2:
@@ -157,6 +159,7 @@ def _render_report_download_buttons(ev: dict, key_prefix: str, api_key: str = No
                 mime="text/html",
                 use_container_width=True,
                 key=f"{key_prefix}_html",
+                on_click="ignore",
             )
         except Exception as e:
             st.button("HTML (failed)", disabled=True,
@@ -175,6 +178,7 @@ def _render_report_download_buttons(ev: dict, key_prefix: str, api_key: str = No
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True,
                 key=f"{key_prefix}_docx",
+                on_click="ignore",
             )
         except Exception as e:
             st.button("Word (failed)", disabled=True,
@@ -195,6 +199,7 @@ def _render_report_download_buttons(ev: dict, key_prefix: str, api_key: str = No
                     mime="application/pdf",
                     use_container_width=True,
                     key=f"{key_prefix}_pdf",
+                    on_click="ignore",
                 )
             else:
                 st.button("PDF (unavailable)", disabled=True,
