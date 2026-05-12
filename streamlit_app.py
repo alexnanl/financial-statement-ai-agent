@@ -73,32 +73,37 @@ with st.sidebar:
 
     # Data source status indicator
     status = setup_status()
-    if status["fmp_configured"]:
+    primary = status.get("primary_source_label", "yfinance")
+    if primary == "SEC EDGAR":
+        st.caption("📡 Data: **SEC EDGAR** (primary) + yfinance (market cap)")
+    elif primary == "FMP":
         st.caption("📡 Data: **FMP** (primary) + yfinance (fallback)")
     else:
-        st.caption("📡 Data: **yfinance** only "
-                    "(add `FMP_API_KEY` for better reliability)")
+        st.caption("📡 Data: **yfinance** only")
 
-    # Data source diagnostics - show users what FMP is actually doing
+    # Data source diagnostics - show users what's actually happening
     with st.expander("🔍 Data Source Diagnostics", expanded=False):
         diag = diagnose()
 
-        # Key presence + source
-        if diag["fmp_key_present"]:
-            st.success(f"✅ FMP_API_KEY found in **{diag['fmp_key_source']}** "
-                        f"({diag['fmp_key_length']} chars)")
-        else:
-            st.error("❌ FMP_API_KEY not found. "
-                      "App is using **yfinance only**.\n\n"
-                      "**To fix**: add `FMP_API_KEY = \"...\"` to "
-                      "Streamlit Cloud → Settings → Secrets, "
-                      "or set the env var locally.")
+        # Show primary source
+        st.markdown(f"**Primary source**: `{diag.get('primary_source', 'unknown')}`")
+        ua = diag.get("sec_user_agent")
+        if ua:
+            st.markdown(f"**SEC User-Agent**: `{ua}`")
 
-        # Recent FMP calls
-        recent = diag["recent_calls"]
+        # FMP status (only relevant if FMP is enabled)
+        if diag.get("fmp_enabled"):
+            if diag["fmp_key_present"]:
+                st.success(f"FMP_API_KEY found in **{diag['fmp_key_source']}**")
+            else:
+                st.warning("FMP enabled but no FMP_API_KEY set.")
+        else:
+            st.caption("_FMP is disabled in this build (USE_FMP=False)._")
+
+        # Recent API calls
+        recent = diag.get("recent_calls", [])
         if recent:
-            st.markdown("**Recent FMP calls** (latest first):")
-            # Show in reverse chronological order
+            st.markdown("**Recent API calls** (latest first):")
             for call in reversed(recent[-10:]):
                 status_emoji = {
                     "ok": "✅",
@@ -112,16 +117,17 @@ with st.sidebar:
                     "fmp_error": "⚠️",
                     "parse_error": "🔧",
                     "unexpected": "❓",
+                    "blocked": "🚫",
+                    "not_found": "❓",
                 }.get(call["status"], "•")
                 st.caption(f"{status_emoji} `{call['ts']}` "
                            f"**{call['status']}** `{call['endpoint']}` "
                            f"{('— ' + call['detail']) if call['detail'] else ''}")
         else:
-            st.caption("_No FMP calls yet this session. Run an analysis to see activity._")
+            st.caption("_No API calls yet this session. Run an analysis to see activity._")
 
         if st.button("🧹 Clear diagnostics", key="clear_diag"):
             clear_diagnostics()
-            # Also clear cached results so a re-run actually hits FMP again
             st.cache_data.clear()
             st.rerun()
 
@@ -228,13 +234,17 @@ if not run and not has_classic_analysis:
 
     with st.expander("📖 What This Does", expanded=True):
         status = setup_status()
-        if status["fmp_configured"]:
+        primary = status.get("primary_source_label", "yfinance")
+        if primary == "SEC EDGAR":
+            data_status = ("✅ **SEC EDGAR** is the primary data source — "
+                            "no API key needed, no daily rate limit, "
+                            "and 10+ years of history per company.")
+        elif primary == "FMP":
             data_status = ("✅ **FMP is configured** as the primary data source "
                             "on this deployment.")
         else:
-            data_status = ("⚠️ **FMP is not configured.** Running on yfinance only. "
-                            "Adding `FMP_API_KEY` to Streamlit Secrets significantly "
-                            "improves data coverage and avoids Yahoo rate limits.")
+            data_status = ("⚠️ Running on **yfinance only**. "
+                            "yfinance can hit Yahoo rate limits in heavy use.")
 
         st.markdown(f"""
         ### Features
@@ -250,8 +260,9 @@ if not run and not has_classic_analysis:
 
         ```text
         US Stocks (NYSE / NASDAQ)
-         ├─ Primary:  FMP (Financial Modeling Prep) - 5 yrs of data, fewer rate limits
-         └─ Fallback: yfinance (Yahoo Finance) - 4 yrs, free, no key needed
+         ├─ Primary:    SEC EDGAR (data.sec.gov)   - free, no key, 10+ yrs history
+         ├─ Market cap: yfinance (Yahoo Finance)   - SEC doesn't provide stock prices
+         └─ Fallback:   yfinance (full statements) - if SEC data is incomplete
         ```
 
         {data_status}
@@ -278,10 +289,12 @@ if "error" in info or financials.get("income", pd.DataFrame()).empty:
 # Data source label (shown small under the company header)
 src = info.get("_source") or financials.get("_source", "unknown")
 SRC_LABELS = {
+    "sec": "SEC EDGAR",
+    "sec+yfinance_merged": "SEC EDGAR + yfinance (merged)",
     "fmp": "FMP",
+    "fmp+yfinance_merged": "FMP + yfinance (merged)",
     "yfinance": "yfinance",
     "yfinance_legacy": "yfinance",
-    "fmp+yfinance_merged": "FMP + yfinance (merged)",
 }
 src_label = SRC_LABELS.get(src, src)
 
